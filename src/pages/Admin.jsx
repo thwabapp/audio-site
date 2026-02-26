@@ -47,7 +47,6 @@ export default function Admin() {
       const safeName = file.name.replace(/[^\w.-]+/g, "_");
       const path = `${Date.now()}_${safeName}`;
 
-      // رفع الملف إلى Storage
       const { error: upErr } = await supabase.storage
         .from("audio")
         .upload(path, file, {
@@ -58,11 +57,9 @@ export default function Admin() {
 
       if (upErr) throw upErr;
 
-      // الحصول على الرابط العام
       const { data: pub } = supabase.storage.from("audio").getPublicUrl(path);
       const publicUrl = pub.publicUrl;
 
-      // حفظ بيانات المقطع في جدول tracks
       const { error: insErr } = await supabase.from("tracks").insert({
         title: title.trim(),
         description: description.trim(),
@@ -84,69 +81,76 @@ export default function Admin() {
     }
   }
 
-  if (!session) {
-    return (
-      <div dir="rtl" style={{ maxWidth: 520, margin: "0 auto", padding: 20, fontFamily: "system-ui" }}>
-        <h1>لوحة الإدارة</h1>
-        <p style={{ opacity: 0.75 }}>تسجيل دخول الأدمن</p>
-
-        <form onSubmit={login} style={{ display: "grid", gap: 10, marginTop: 14 }}>
-          <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="البريد الإلكتروني"
-            autoComplete="email"
-          />
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="كلمة المرور"
-            type="password"
-            autoComplete="current-password"
-          />
-          <button style={{ padding: 10, cursor: "pointer" }}>تسجيل الدخول</button>
-        </form>
-
-        {msg ? <p style={{ marginTop: 12 }}>{msg}</p> : null}
-        <p style={{ marginTop: 18, opacity: 0.7 }}>
-          <a href="/">العودة للموقع</a>
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div dir="rtl" style={{ maxWidth: 720, margin: "0 auto", padding: 20, fontFamily: "system-ui" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-        <h1 style={{ margin: 0 }}>لوحة الإدارة</h1>
-        <button onClick={logout} style={{ padding: "8px 10px", cursor: "pointer" }}>
-          تسجيل خروج
-        </button>
+    <div dir="rtl" className="container">
+      <div className="topbar">
+        <div className="brand">
+          <h1>لوحة الإدارة</h1>
+          <p>رفع المقاطع وإدارتها</p>
+        </div>
+        <div className="actions">
+          <a className="btn" href="/" style={{ textDecoration: "none" }}>
+            العودة للموقع
+          </a>
+          {session ? (
+            <button className="btn" onClick={logout}>تسجيل خروج</button>
+          ) : null}
+        </div>
       </div>
 
-      <p style={{ opacity: 0.75, marginTop: 8 }}>رفع ملف MP3 ونشره مباشرة</p>
+      {!session ? (
+        <div className="card" style={{ marginTop: 14 }}>
+          <p className="title" style={{ margin: 0 }}>تسجيل دخول الأدمن</p>
+          <p className="desc">استخدم بيانات الأدمن المسجلة في Supabase</p>
 
-      <form onSubmit={uploadTrack} style={{ display: "grid", gap: 10, marginTop: 14 }}>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="عنوان المقطع" />
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="وصف مختصر (اختياري)"
-          rows={3}
-        />
-        <input type="file" accept="audio/mpeg,.mp3" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <form onSubmit={login} className="grid" style={{ marginTop: 12 }}>
+            <input
+              className="input"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="البريد الإلكتروني"
+              autoComplete="email"
+            />
+            <input
+              className="input"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="كلمة المرور"
+              type="password"
+              autoComplete="current-password"
+            />
+            <button className="btn primary" style={{ width: "fit-content" }}>
+              تسجيل الدخول
+            </button>
+          </form>
 
-        <button disabled={busy} style={{ padding: 10, cursor: "pointer" }}>
-          {busy ? "جارِ الرفع…" : "رفع ونشر"}
-        </button>
-      </form>
+          {msg ? <p className="small" style={{ marginTop: 10 }}>{msg}</p> : null}
+        </div>
+      ) : (
+        <div className="card" style={{ marginTop: 14 }}>
+          <p className="title" style={{ margin: 0 }}>رفع مقطع جديد</p>
+          <p className="desc">MP3 فقط — وسيظهر فورًا في الصفحة الرئيسية</p>
 
-      {msg ? <p style={{ marginTop: 12 }}>{msg}</p> : null}
+          <form onSubmit={uploadTrack} className="grid" style={{ marginTop: 12 }}>
+            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="عنوان المقطع" />
+            <textarea
+              className="input"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="وصف مختصر (اختياري)"
+              rows={4}
+              style={{ resize: "vertical" }}
+            />
+            <input type="file" accept="audio/mpeg,.mp3" onChange={(e) => setFile(e.target.files?.[0] || null)} />
 
-      <hr style={{ margin: "18px 0" }} />
-      <p style={{ opacity: 0.8 }}>
-        <a href="/">فتح الموقع</a>
-      </p>
+            <button className="btn primary" disabled={busy} style={{ width: "fit-content" }}>
+              {busy ? "جارِ الرفع…" : "رفع ونشر"}
+            </button>
+          </form>
+
+          {msg ? <p className="small" style={{ marginTop: 10 }}>{msg}</p> : null}
+        </div>
+      )}
     </div>
   );
 }
