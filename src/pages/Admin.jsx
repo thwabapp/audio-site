@@ -150,11 +150,15 @@ export default function Admin() {
 
       // حذف الملف القديم من Storage إذا تم رفع ملف جديد
       if (file && currentTrack.file_path) {
-        await supabase.storage.from("audio").remove([currentTrack.file_path]);
+        const { error: rmOldErr } = await supabase.storage.from("audio").remove([currentTrack.file_path]);
+        // لو فشل حذف القديم نعرض تحذير لكن ما نكسر التعديل
+        if (rmOldErr) {
+          setMsg("⚠️ تم التعديل، لكن تعذر حذف الملف القديم من التخزين.");
+        }
       }
 
       resetForm();
-      setMsg("✅ تم تعديل المقطع بنجاح.");
+      setMsg((prev) => prev || "✅ تم تعديل المقطع بنجاح.");
       await fetchTracks();
     } catch (err) {
       setMsg(`❌ فشل العملية: ${err.message || String(err)}`);
@@ -164,30 +168,35 @@ export default function Admin() {
   }
 
   async function deleteTrack(t) {
-    const ok = confirm(`هل تريد حذف المقطع: "${t.title}" ؟\n(سيتم حذف السجل والملف)`);
+    const ok = confirm(`هل تريد حذف المقطع: "${t.title}" ؟\n(سيتم حذف الملف ثم السجل)`);
     if (!ok) return;
 
     setMsg("");
     setBusy(true);
-    try {
-      // 1) حذف السجل
-      const { error: delErr } = await supabase.from("tracks").delete().eq("id", t.id);
-      if (delErr) throw delErr;
 
-      // 2) حذف الملف من Storage
+    try {
+      // 1) حذف الملف من Storage أولاً (حتى لو فشل، لا نحذف السجل)
       if (t.file_path) {
         const { error: rmErr } = await supabase.storage.from("audio").remove([t.file_path]);
-        // إذا فشل حذف الملف لا نوقف العملية بالكامل، لكن نعرض تنبيه
         if (rmErr) {
-          setMsg("⚠️ تم حذف السجل، لكن تعذر حذف الملف من التخزين.");
+          throw new Error(`تعذر حذف الملف من التخزين: ${rmErr.message}`);
         }
+      } else {
+        // إذا لا يوجد file_path هذا يعني ما نقدر نحذف الملف فعلياً
+        throw new Error("لا يوجد file_path لهذا المقطع، لا يمكن حذف الملف من التخزين.");
+      }
+
+      // 2) حذف السجل من قاعدة البيانات
+      const { error: delErr } = await supabase.from("tracks").delete().eq("id", t.id);
+      if (delErr) {
+        throw new Error(`تم حذف الملف، لكن تعذر حذف السجل من قاعدة البيانات: ${delErr.message}`);
       }
 
       // لو كنت تعدل نفس المقطع احنا نحذف وضع التعديل
       if (editingId === t.id) resetForm();
 
       await fetchTracks();
-      setMsg((prev) => prev || "✅ تم حذف المقطع بنجاح.");
+      setMsg("✅ تم حذف المقطع (الملف + السجل) بنجاح.");
     } catch (err) {
       setMsg(`❌ فشل الحذف: ${err.message || String(err)}`);
     } finally {
