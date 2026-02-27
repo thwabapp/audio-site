@@ -1,6 +1,38 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
+const AUDIO_BUCKET = "audio";
+
+// يحول file_path إلى key صحيح داخل البكت (سواء كان URL أو مسار)
+function toStorageKey(filePathOrUrl) {
+  if (!filePathOrUrl) return null;
+
+  // لو URL: خذ الجزء بعد /object/public/<bucket>/
+  if (String(filePathOrUrl).startsWith("http")) {
+    try {
+      const u = new URL(filePathOrUrl);
+      const marker = `/storage/v1/object/public/${AUDIO_BUCKET}/`;
+      const idx = u.pathname.indexOf(marker);
+      if (idx !== -1) {
+        const key = u.pathname.slice(idx + marker.length);
+        return decodeURIComponent(key).replace(/^\/+/, "");
+      }
+      // fallback: آخر جزء من المسار
+      return decodeURIComponent(u.pathname.split("/").pop() || "").replace(/^\/+/, "");
+    } catch {
+      return String(filePathOrUrl).replace(/^\/+/, "");
+    }
+  }
+
+  // لو محفوظ بشكل audio/filename.mp3
+  const prefix = `${AUDIO_BUCKET}/`;
+  if (String(filePathOrUrl).startsWith(prefix)) {
+    return String(filePathOrUrl).slice(prefix.length);
+  }
+
+  return String(filePathOrUrl).replace(/^\/+/, "");
+}
+
 export default function Admin() {
   const [session, setSession] = useState(null);
 
@@ -14,11 +46,9 @@ export default function Admin() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
-  // list
   const [tracks, setTracks] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
 
-  // edit mode
   const [editingId, setEditingId] = useState(null);
   const isEditing = useMemo(() => editingId !== null, [editingId]);
 
@@ -67,22 +97,21 @@ export default function Admin() {
     setEditingId(t.id);
     setTitle(t.title || "");
     setDescription(t.description || "");
-    setFile(null); // إذا المستخدم اختار ملف جديد فقط نبدّله
+    setFile(null);
   }
 
   async function uploadToStorage(selectedFile) {
     const safeName = selectedFile.name.replace(/[^\w.-]+/g, "_");
     const path = `${Date.now()}_${safeName}`;
 
-    const { error: upErr } = await supabase.storage.from("audio").upload(path, selectedFile, {
+    const { error: upErr } = await supabase.storage.from(AUDIO_BUCKET).upload(path, selectedFile, {
       cacheControl: "3600",
       upsert: false,
       contentType: "audio/mpeg",
     });
-
     if (upErr) throw upErr;
 
-    const { data: pub } = supabase.storage.from("audio").getPublicUrl(path);
+    const { data: pub } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(path);
     return { path, publicUrl: pub.publicUrl };
   }
 
@@ -90,7 +119,6 @@ export default function Admin() {
     e.preventDefault();
     setMsg("");
 
-    // في الإضافة لازم ملف، في التعديل الملف اختياري
     if (!isEditing && !file) return setMsg("اختر ملف MP3 أولاً.");
     if (!title.trim()) return setMsg("اكتب عنوان المقطع.");
 
@@ -103,17 +131,15 @@ export default function Admin() {
     setBusy(true);
     try {
       if (!isEditing) {
-        // ADD
         const { path, publicUrl } = await uploadToStorage(file);
 
         const { error: insErr } = await supabase.from("tracks").insert({
           title: title.trim(),
           description: description.trim(),
-          file_path: path,
+          file_path: path, // نخزن KEY (اسم الملف) وليس URL
           public_url: publicUrl,
           published: true,
         });
-
         if (insErr) throw insErr;
 
         resetForm();
@@ -122,14 +148,12 @@ export default function Admin() {
         return;
       }
 
-      // EDIT
       const currentTrack = tracks.find((x) => x.id === editingId);
       if (!currentTrack) throw new Error("لم يتم العثور على المقطع للتعديل.");
 
       let nextPublicUrl = currentTrack.public_url;
       let nextFilePath = currentTrack.file_path;
 
-      // لو المستخدم اختار ملف جديد: نرفعه ونحدّث الحقول، ونحذف القديم
       if (file) {
         const uploaded = await uploadToStorage(file);
         nextPublicUrl = uploaded.publicUrl;
@@ -145,20 +169,18 @@ export default function Admin() {
           file_path: nextFilePath,
         })
         .eq("id", editingId);
-
       if (upErr) throw upErr;
 
-      // حذف الملف القديم من Storage إذا تم رفع ملف جديد
+      // حذف الملف القديم إذا تم رفع ملف جديد
       if (file && currentTrack.file_path) {
-        const { error: rmOldErr } = await supabase.storage.from("audio").remove([currentTrack.file_path]);
-        // لو فشل حذف القديم نعرض تحذير لكن ما نكسر التعديل
-        if (rmOldErr) {
-          setMsg("⚠️ تم التعديل، لكن تعذر حذف الملف القديم من التخزين.");
+        const oldKey = toStorageKey(currentTrack.file_path);
+        if (oldKey) {
+          await supabase.storage.from(AUDIO_BUCKET).remove([oldKey]);
         }
       }
 
       resetForm();
-      setMsg((prev) => prev || "✅ تم تعديل المقطع بنجاح.");
+      setMsg("✅ تم تعديل المقطع بنجاح.");
       await fetchTracks();
     } catch (err) {
       setMsg(`❌ فشل العملية: ${err.message || String(err)}`);
@@ -167,7 +189,6 @@ export default function Admin() {
     }
   }
 
-  // ✅ النسخة المعدلة: تأكيد حذف الملف + تأكيد حذف السجل + تحديث UI
   async function deleteTrack(t) {
     const ok = confirm(`هل تريد حذف المقطع: "${t.title}" ؟\n(سيتم حذف الملف ثم السجل)`);
     if (!ok) return;
@@ -176,35 +197,24 @@ export default function Admin() {
     setBusy(true);
 
     try {
-      // 1) حذف الملف من Storage أولاً (لو فشل لا نحذف السجل)
-      if (!t.file_path) {
-        throw new Error("لا يوجد file_path لهذا المقطع، لا يمكن حذف الملف من التخزين.");
-      }
+      // 1) حذف الملف من Storage باستخدام KEY الصحيح
+      const key = toStorageKey(t.file_path);
+      if (!key) throw new Error("لا يوجد file_path صالح لهذا المقطع.");
 
-      const { data: rmData, error: rmErr } = await supabase.storage.from("audio").remove([t.file_path]);
+      const { data: rmData, error: rmErr } = await supabase.storage.from(AUDIO_BUCKET).remove([key]);
       if (rmErr) throw new Error(`تعذر حذف الملف من التخزين: ${rmErr.message}`);
+      if (!rmData || rmData.length === 0) throw new Error("لم يتم حذف الملف فعليًا (تحقق من key داخل bucket).");
 
-      // تحقق أن الحذف حصل فعليًا
-      if (!rmData || rmData.length === 0) {
-        throw new Error("لم يتم حذف الملف فعليًا (تحقق من file_path واسم الـ bucket).");
-      }
-
-      // 2) حذف السجل من قاعدة البيانات (مع count للتأكد)
-      const { error: delErr, count } = await supabase
-        .from("tracks")
-        .delete({ count: "exact" })
-        .eq("id", t.id);
-
+      // 2) حذف السجل من قاعدة البيانات
+      const { error: delErr, count } = await supabase.from("tracks").delete({ count: "exact" }).eq("id", t.id);
       if (delErr) throw new Error(`تعذر حذف السجل من قاعدة البيانات: ${delErr.message}`);
-      if (!count || count === 0) throw new Error("لم يتم حذف أي سجل (قد تكون هناك سياسات RLS تمنع الحذف).");
+      if (!count || count === 0) throw new Error("لم يتم حذف أي سجل (تحقق من سياسات RLS للحذف).");
 
-      // 3) تحديث الواجهة فورًا
+      // 3) تحديث الواجهة
       setTracks((prev) => prev.filter((x) => x.id !== t.id));
       if (editingId === t.id) resetForm();
 
       setMsg("✅ تم حذف المقطع (الملف + السجل) بنجاح.");
-
-      // تحديث احتياطي للتأكد
       await fetchTracks();
     } catch (err) {
       setMsg(`❌ فشل الحذف: ${err.message || String(err)}`);
@@ -240,41 +250,25 @@ export default function Admin() {
           <p className="desc">استخدم بيانات الأدمن المسجلة في Supabase</p>
 
           <form onSubmit={login} className="grid" style={{ marginTop: 12 }}>
-            <input
-              className="input"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="البريد الإلكتروني"
-              autoComplete="email"
-            />
+            <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="البريد الإلكتروني" />
             <input
               className="input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="كلمة المرور"
               type="password"
-              autoComplete="current-password"
             />
             <button className="btn primary" style={{ width: "fit-content" }}>
               تسجيل الدخول
             </button>
           </form>
 
-          {msg ? (
-            <p className="small" style={{ marginTop: 10 }}>
-              {msg}
-            </p>
-          ) : null}
+          {msg ? <p className="small" style={{ marginTop: 10 }}>{msg}</p> : null}
         </div>
       ) : (
         <>
           <div className="card" style={{ marginTop: 14 }}>
-            <p className="title" style={{ margin: 0 }}>
-              {isEditing ? "تعديل المقطع" : "رفع مقطع جديد"}
-            </p>
-            <p className="desc">
-              MP3 فقط — {isEditing ? "يمكنك تغيير العنوان/الوصف، ورفع ملف جديد (اختياري)" : "وسيظهر فورًا في الصفحة الرئيسية"}
-            </p>
+            <p className="title" style={{ margin: 0 }}>{isEditing ? "تعديل المقطع" : "رفع مقطع جديد"}</p>
 
             <form onSubmit={uploadTrack} className="grid" style={{ marginTop: 12 }}>
               <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="عنوان المقطع" />
@@ -284,7 +278,6 @@ export default function Admin() {
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="وصف مختصر (اختياري)"
                 rows={4}
-                style={{ resize: "vertical" }}
               />
               <input type="file" accept="audio/mpeg,.mp3" onChange={(e) => setFile(e.target.files?.[0] || null)} />
 
@@ -292,7 +285,6 @@ export default function Admin() {
                 <button className="btn primary" disabled={busy} style={{ width: "fit-content" }}>
                   {busy ? "جارِ التنفيذ…" : isEditing ? "حفظ التعديل" : "رفع ونشر"}
                 </button>
-
                 {isEditing ? (
                   <button className="btn ghost" type="button" onClick={resetForm} disabled={busy} style={{ width: "fit-content" }}>
                     إلغاء التعديل
@@ -301,49 +293,37 @@ export default function Admin() {
               </div>
             </form>
 
-            {msg ? (
-              <p className="small" style={{ marginTop: 10 }}>
-                {msg}
-              </p>
-            ) : null}
+            {msg ? <p className="small" style={{ marginTop: 10 }}>{msg}</p> : null}
           </div>
 
           <div className="card" style={{ marginTop: 14 }}>
             <div className="cardHead" style={{ justifyContent: "space-between" }}>
               <div>
-                <p className="title" style={{ margin: 0 }}>
-                  المقاطع
-                </p>
-                <p className="desc" style={{ margin: 0 }}>
-                  تعديل أو حذف أي مقطع
-                </p>
+                <p className="title" style={{ margin: 0 }}>المقاطع</p>
+                <p className="desc" style={{ margin: 0 }}>تعديل أو حذف أي مقطع</p>
               </div>
-
               <button className="btn" onClick={fetchTracks} disabled={busy || loadingList} style={{ width: "fit-content" }}>
                 {loadingList ? "تحديث…" : "تحديث القائمة"}
               </button>
             </div>
 
             {loadingList ? (
-              <p className="small" style={{ marginTop: 10 }}>
-                جارِ التحميل…
-              </p>
+              <p className="small" style={{ marginTop: 10 }}>جارِ التحميل…</p>
             ) : tracks.length === 0 ? (
-              <p className="small" style={{ marginTop: 10 }}>
-                لا توجد مقاطع حتى الآن.
-              </p>
+              <p className="small" style={{ marginTop: 10 }}>لا توجد مقاطع حتى الآن.</p>
             ) : (
               <div className="grid" style={{ marginTop: 12 }}>
                 {tracks.map((t) => (
                   <div key={t.id} className="card" style={{ margin: 0 }}>
                     <div className="cardHead" style={{ alignItems: "flex-start" }}>
                       <div style={{ minWidth: 0 }}>
-                        <p className="title" style={{ margin: 0 }}>
-                          {t.title}
-                        </p>
+                        <p className="title" style={{ margin: 0 }}>{t.title}</p>
                         {t.description ? <p className="desc">{t.description}</p> : <p className="desc">—</p>}
                         <p className="small" style={{ marginTop: 8, opacity: 0.75, wordBreak: "break-all" }}>
                           {t.public_url}
+                        </p>
+                        <p className="small" style={{ marginTop: 4, opacity: 0.6, wordBreak: "break-all" }}>
+                          file_path: {t.file_path}
                         </p>
                       </div>
 
