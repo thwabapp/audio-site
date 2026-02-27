@@ -25,10 +25,11 @@ export default function Home() {
       setLoading(true);
       const { data, error } = await supabase
         .from("tracks")
-        .select("id,title,description,public_url,created_at")
+        .select("id,title,description,public_url,created_at,published")
         .order("created_at", { ascending: false });
 
-      if (!error && data) setTracks(data);
+      // لو عندك published وتبي تعرض المنشور فقط:
+      if (!error && data) setTracks(data.filter((t) => t.published !== false));
       setLoading(false);
     })();
   }, []);
@@ -104,6 +105,32 @@ export default function Home() {
     setPos(next);
   }
 
+  async function shareTrack(t) {
+    if (!t?.public_url) return;
+
+    const url = t.public_url;
+    const text = `${t.title || "مقطع صوتي"}\n${url}`;
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: t.title || "مقطع صوتي",
+          text: t.title || "مقطع صوتي",
+          url,
+        });
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        alert("✅ تم نسخ الرابط للمشاركة");
+      } else {
+        // fallback قديم
+        window.prompt("انسخ الرابط للمشاركة:", text);
+      }
+    } catch (e) {
+      // المستخدم قد يلغي المشاركة — نتجاهل بصمت
+      console.log(e);
+    }
+  }
+
   return (
     <div dir="rtl" className="container">
       <div className="topbar">
@@ -122,12 +149,7 @@ export default function Home() {
       </div>
 
       <div className="searchRow">
-        <input
-          className="input"
-          placeholder="ابحث عن مقطع…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+        <input className="input" placeholder="ابحث عن مقطع…" value={q} onChange={(e) => setQ(e.target.value)} />
         <button className="btn ghost" onClick={() => setQ("")}>
           مسح
         </button>
@@ -153,13 +175,15 @@ export default function Home() {
                   {t.description ? <p className="desc">{t.description}</p> : null}
                 </div>
 
-                <button
-                  className="btn primary"
-                  onClick={() => playTrack(t)}
-                  style={{ minWidth: 110 }}
-                >
-                  {current?.id === t.id && isPlaying ? "إيقاف مؤقت" : "تشغيل"}
-                </button>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button className="btn ghost" onClick={() => shareTrack(t)} style={{ minWidth: 110 }}>
+                    مشاركة
+                  </button>
+
+                  <button className="btn primary" onClick={() => playTrack(t)} style={{ minWidth: 110 }}>
+                    {current?.id === t.id && isPlaying ? "إيقاف مؤقت" : "تشغيل"}
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -172,16 +196,15 @@ export default function Home() {
 
           <div className="playerTop">
             <div className="now">
-              <p className="nowTitle">
-                {current ? current.title : "اختر مقطعًا للتشغيل"}
-              </p>
+              <p className="nowTitle">{current ? current.title : "اختر مقطعًا للتشغيل"}</p>
               <p className="nowDesc">{current?.description || "—"}</p>
             </div>
 
-            <div className="controls">
+            <div className="controls" style={{ flexWrap: "wrap" }}>
               <button className="btn" onClick={() => jump(-10)} disabled={!current}>
                 -10ث
               </button>
+
               <button
                 className="btn primary"
                 disabled={!current}
@@ -199,8 +222,13 @@ export default function Home() {
               >
                 {isPlaying ? "إيقاف" : "تشغيل"}
               </button>
+
               <button className="btn" onClick={() => jump(10)} disabled={!current}>
                 +10ث
+              </button>
+
+              <button className="btn ghost" onClick={() => shareTrack(current)} disabled={!current}>
+                مشاركة
               </button>
             </div>
           </div>
