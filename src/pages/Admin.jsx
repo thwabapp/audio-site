@@ -167,6 +167,7 @@ export default function Admin() {
     }
   }
 
+  // ✅ النسخة المعدلة: تأكيد حذف الملف + تأكيد حذف السجل + تحديث UI
   async function deleteTrack(t) {
     const ok = confirm(`هل تريد حذف المقطع: "${t.title}" ؟\n(سيتم حذف الملف ثم السجل)`);
     if (!ok) return;
@@ -175,28 +176,36 @@ export default function Admin() {
     setBusy(true);
 
     try {
-      // 1) حذف الملف من Storage أولاً (حتى لو فشل، لا نحذف السجل)
-      if (t.file_path) {
-        const { error: rmErr } = await supabase.storage.from("audio").remove([t.file_path]);
-        if (rmErr) {
-          throw new Error(`تعذر حذف الملف من التخزين: ${rmErr.message}`);
-        }
-      } else {
-        // إذا لا يوجد file_path هذا يعني ما نقدر نحذف الملف فعلياً
+      // 1) حذف الملف من Storage أولاً (لو فشل لا نحذف السجل)
+      if (!t.file_path) {
         throw new Error("لا يوجد file_path لهذا المقطع، لا يمكن حذف الملف من التخزين.");
       }
 
-      // 2) حذف السجل من قاعدة البيانات
-      const { error: delErr } = await supabase.from("tracks").delete().eq("id", t.id);
-      if (delErr) {
-        throw new Error(`تم حذف الملف، لكن تعذر حذف السجل من قاعدة البيانات: ${delErr.message}`);
+      const { data: rmData, error: rmErr } = await supabase.storage.from("audio").remove([t.file_path]);
+      if (rmErr) throw new Error(`تعذر حذف الملف من التخزين: ${rmErr.message}`);
+
+      // تحقق أن الحذف حصل فعليًا
+      if (!rmData || rmData.length === 0) {
+        throw new Error("لم يتم حذف الملف فعليًا (تحقق من file_path واسم الـ bucket).");
       }
 
-      // لو كنت تعدل نفس المقطع احنا نحذف وضع التعديل
+      // 2) حذف السجل من قاعدة البيانات (مع count للتأكد)
+      const { error: delErr, count } = await supabase
+        .from("tracks")
+        .delete({ count: "exact" })
+        .eq("id", t.id);
+
+      if (delErr) throw new Error(`تعذر حذف السجل من قاعدة البيانات: ${delErr.message}`);
+      if (!count || count === 0) throw new Error("لم يتم حذف أي سجل (قد تكون هناك سياسات RLS تمنع الحذف).");
+
+      // 3) تحديث الواجهة فورًا
+      setTracks((prev) => prev.filter((x) => x.id !== t.id));
       if (editingId === t.id) resetForm();
 
-      await fetchTracks();
       setMsg("✅ تم حذف المقطع (الملف + السجل) بنجاح.");
+
+      // تحديث احتياطي للتأكد
+      await fetchTracks();
     } catch (err) {
       setMsg(`❌ فشل الحذف: ${err.message || String(err)}`);
     } finally {
